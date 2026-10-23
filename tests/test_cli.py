@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from yubapkg.cli import main
+from pkg.cli import main
 
 
 def write_package(root: Path, name: str) -> None:

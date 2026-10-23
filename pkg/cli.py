@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from yubapkg.core import (
+from .core import (
     MANIFEST_NAME,
     PackageError,
     check,

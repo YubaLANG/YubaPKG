@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from yubapkg.core import PackageError, check, initialize_project, install
+from pkg.core import PackageError, check, initialize_project, install
 
 
 def write_package(root: Path, name: str) -> None:

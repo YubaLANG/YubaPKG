@@ -26,10 +26,10 @@ yubapkg package install
 yubapkg package check
 ```
 
-The module can also be run without installing the console command:
+The package can also be run without installing the console command:
 
 ```powershell
-python -m yubapkg package --help
+python -m pkg package --help
 ```
 
 Use `yubapkg package init` to create a project, then run package commands from
