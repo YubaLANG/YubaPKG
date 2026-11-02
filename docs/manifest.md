@@ -8,14 +8,15 @@ minimal project manifest is:
   "name": "sample",
   "version": "0.1.0",
   "entry": "main.yl",
-  "yubalang": "1.2",
+  "yubalang": "1.3",
   "dependencies": {}
 }
 ```
 
 The `name`, `version`, `entry`, and `yubalang` values are required strings.
 Package names start with a letter and may contain letters, digits, underscores,
-and hyphens. The current importer supports YubaLANG version `1.2`.
+and hyphens. YubaPKG accepts YubaLANG versions `1.2` and `1.3`. New projects
+target `1.3`.
 
 ## Dependencies
 
@@ -53,11 +54,15 @@ copied into the package cache.
 
 ## Lockfile
 
-Check `yuba.lock.json` into version control along with `yuba.json`. The
-lockfile records each direct dependency source and its resolved path or Git
-commit. `yubapkg package check` compares the manifest, lockfile, and local
+Check `yuba.lock.json` into version control along with `yuba.json`. Lockfile
+format 2 records each dependency's source and resolved path or Git commit,
+package identity, and complete nested dependency graph. Each dependency's own
+lockfile records the graph relative to its manifest. `yubapkg package check`
+compares manifests, nested lockfiles, package identities, and local
 installations without contacting Git remotes.
 
-The current release supports direct path and Git dependencies only. Registry
-metadata, semantic-version ranges, transitive dependency solving, and package
-publishing are future work.
+Existing format-1 lockfiles are upgraded to format 2 by
+`yubapkg package install`, preserving previously locked Git revisions when
+sources are unchanged. Path and Git dependencies may be nested recursively;
+registry metadata, semantic-version range solving, and package publishing are
+future work.

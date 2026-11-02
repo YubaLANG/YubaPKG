@@ -12,8 +12,9 @@ from typing import Any
 
 MANIFEST_NAME = "yuba.json"
 LOCK_NAME = "yuba.lock.json"
-LOCK_VERSION = 1
-SUPPORTED_YUBALANG = "1.2"
+LOCK_VERSION = 2
+SUPPORTED_YUBALANG_VERSIONS = frozenset({"1.2", "1.3"})
+SUPPORTED_YUBALANG = "1.3"
 PACKAGE_CACHE = Path(".yuba") / "packages"
 _PACKAGE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
 _COMMIT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -81,10 +82,10 @@ def read_manifest(root: Path) -> dict[str, Any]:
         if not isinstance(data.get(field), str) or not data[field]:
             raise PackageError(f"Manifest '{path}' requires a non-empty '{field}' string.")
     _validate_name(data["name"])
-    if data["yubalang"] != SUPPORTED_YUBALANG:
+    if data["yubalang"] not in SUPPORTED_YUBALANG_VERSIONS:
         raise PackageError(
             f"Manifest '{path}' requires YubaLANG {data['yubalang']}; "
-            f"this runtime supports {SUPPORTED_YUBALANG}."
+            "this runtime supports 1.2 and 1.3."
         )
     dependencies = data.setdefault("dependencies", {})
     if not isinstance(dependencies, dict):
@@ -122,7 +123,9 @@ def read_lockfile(root: Path) -> dict[str, Any]:
     path = root / LOCK_NAME
     lock = _read_existing_lock(root)
     if (
-        lock.get("lock_version") != LOCK_VERSION
+        not isinstance(lock.get("lock_version"), int)
+        or isinstance(lock.get("lock_version"), bool)
+        or lock.get("lock_version") != LOCK_VERSION
         or not isinstance(lock.get("dependencies"), dict)
     ):
         raise PackageError(
@@ -264,8 +267,30 @@ def _validate_dependency(root: Path, name: str, dependency_root: Path) -> None:
 
 
 def install(root: Path, update: bool | set[str] = False) -> dict[str, Any]:
+    return _install(root.resolve(), update, [])
+
+
+def _install(
+    root: Path,
+    update: bool | set[str],
+    package_stack: list[str],
+    locked_dependencies: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     manifest = read_manifest(root)
-    old_dependencies = _read_existing_lock(root).get("dependencies", {})
+    package_name = manifest["name"]
+    if package_name in package_stack:
+        cycle = " -> ".join((*package_stack, package_name))
+        raise PackageError(f"Dependency cycle detected: {cycle}.")
+    package_stack = [*package_stack, package_name]
+
+    old_dependencies = (
+        locked_dependencies
+        if locked_dependencies is not None
+        else _read_existing_lock(root).get("dependencies", {})
+    )
+    if not isinstance(old_dependencies, dict):
+        old_dependencies = {}
+
     locked: dict[str, Any] = {}
     for name in sorted(manifest["dependencies"]):
         source = manifest["dependencies"][name]
@@ -283,6 +308,20 @@ def install(root: Path, update: bool | set[str] = False) -> dict[str, Any]:
         else:
             dependency_root = _install_git(root, name, source["git"], resolved["rev"])
         _validate_dependency(root, name, dependency_root)
+        dependency_manifest = read_manifest(dependency_root)
+        entry["package"] = {
+            field: dependency_manifest[field]
+            for field in ("name", "version", "entry", "yubalang")
+        }
+        dependency_lock = _install(
+            dependency_root,
+            False,
+            package_stack,
+            entry.get("dependencies")
+            if isinstance(entry.get("dependencies"), dict)
+            else None,
+        )
+        entry["dependencies"] = dependency_lock["dependencies"]
 
     lock = {"lock_version": LOCK_VERSION, "dependencies": locked}
     _write_json(root / LOCK_NAME, lock)
@@ -290,10 +329,31 @@ def install(root: Path, update: bool | set[str] = False) -> dict[str, Any]:
 
 
 def check(root: Path) -> None:
+    _check(root.resolve(), [])
+
+
+def _check(
+    root: Path,
+    package_stack: list[str],
+    expected_dependencies: dict[str, Any] | None = None,
+) -> None:
     manifest = read_manifest(root)
     lock = read_lockfile(root)
+    package_name = manifest["name"]
+    if package_name in package_stack:
+        cycle = " -> ".join((*package_stack, package_name))
+        raise PackageError(f"Dependency cycle detected: {cycle}.")
+    package_stack = [*package_stack, package_name]
     manifest_dependencies = manifest["dependencies"]
     locked_dependencies = lock["dependencies"]
+    if (
+        expected_dependencies is not None
+        and locked_dependencies != expected_dependencies
+    ):
+        raise PackageError(
+            f"Dependency graph for package '{package_name}' differs from the "
+            "root lockfile; run 'yubapkg package install'."
+        )
     if set(manifest_dependencies) != set(locked_dependencies):
         raise PackageError(
             "Manifest dependencies do not match the lockfile; run "
@@ -304,6 +364,18 @@ def check(root: Path) -> None:
         if not isinstance(entry, dict) or entry.get("source") != source:
             raise PackageError(
                 f"Dependency '{name}' differs from the lockfile; "
+                "run 'yubapkg package install'."
+            )
+        package = entry.get("package")
+        if not isinstance(package, dict):
+            raise PackageError(
+                f"Lockfile entry for '{name}' has no package identity; "
+                "run 'yubapkg package install'."
+            )
+        nested_dependencies = entry.get("dependencies")
+        if not isinstance(nested_dependencies, dict):
+            raise PackageError(
+                f"Lockfile entry for '{name}' has no locked dependency graph; "
                 "run 'yubapkg package install'."
             )
         resolved = entry.get("resolved")
@@ -339,6 +411,17 @@ def check(root: Path) -> None:
                     f"not '{source['git']}'."
                 )
         _validate_dependency(root, name, dependency_root)
+        dependency_manifest = read_manifest(dependency_root)
+        expected_package = {
+            field: dependency_manifest[field]
+            for field in ("name", "version", "entry", "yubalang")
+        }
+        if package != expected_package:
+            raise PackageError(
+                f"Package '{name}' metadata differs from the lockfile; "
+                "run 'yubapkg package install'."
+            )
+        _check(dependency_root, package_stack, nested_dependencies)
 
 
 def resolve_dependency(root: Path, name: str) -> Path | None:

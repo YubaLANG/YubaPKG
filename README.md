@@ -6,13 +6,14 @@ can evolve independently from the language runtime.
 
 ## Current status
 
-The first CLI release supports project initialization and direct path or Git
-dependencies. Installs are recorded in `yuba.lock.json`; Git dependencies are
-checked out at exact commits under `.yuba/packages`. The manifest and lockfile
-formats are compatible with the current YubaLANG package importer.
+The first CLI release supports project initialization and recursive path or
+Git dependencies. Installs are recorded in lockfile format 2;
+Git dependencies are checked out at exact commits under `.yuba/packages`.
+YubaPKG accepts YubaLANG 1.2 and 1.3 manifests and writes lockfiles compatible
+with the current YubaLANG package importer.
 
-The public registry, semantic-version ranges, transitive dependency solving,
-and package publishing are not implemented yet.
+The public registry, semantic-version range solving, and package publishing
+are not implemented yet.
 
 ## Run from a checkout
 
