@@ -32,18 +32,30 @@ def _parser() -> argparse.ArgumentParser:
     package_init = package_commands.add_parser("init", help="create a project")
     package_init.add_argument("directory", nargs="?", default=".")
 
-    add = package_commands.add_parser("add", help="add a path or Git dependency")
+    add = package_commands.add_parser(
+        "add", help="add a path, Git, or registry dependency"
+    )
     add.add_argument("name")
     sources = add.add_mutually_exclusive_group(required=True)
     sources.add_argument("--path")
     sources.add_argument("--git")
+    sources.add_argument("--registry", help="semantic-version requirement")
     add.add_argument("--rev", help="Git branch, tag, or commit")
 
     remove = package_commands.add_parser("remove", help="remove a dependency")
     remove.add_argument("name")
 
-    package_commands.add_parser("install", help="install locked dependencies")
-    update = package_commands.add_parser("update", help="update Git dependencies")
+    package_install = package_commands.add_parser(
+        "install", help="install dependencies and update the lockfile"
+    )
+    install_modes = package_install.add_mutually_exclusive_group()
+    install_modes.add_argument(
+        "--offline", action="store_true", help="use only cached packages and metadata"
+    )
+    install_modes.add_argument(
+        "--frozen", action="store_true", help="verify the lockfile without changing it"
+    )
+    update = package_commands.add_parser("update", help="update dependencies")
     update.add_argument("name", nargs="?")
     package_commands.add_parser("list", help="list project dependencies")
     package_commands.add_parser("check", help="verify lockfile and installed dependencies")
@@ -101,7 +113,12 @@ def _run(args: argparse.Namespace) -> int:
     root = _project_root()
     command = args.package_command
     if command == "add":
-        source = {"path": args.path} if args.path is not None else {"git": args.git}
+        if args.path is not None:
+            source = {"path": args.path}
+        elif args.git is not None:
+            source = {"git": args.git}
+        else:
+            source = {"registry": args.registry}
         if args.rev:
             if args.git is None:
                 raise PackageError("--rev can only be used with --git.")
@@ -112,8 +129,12 @@ def _run(args: argparse.Namespace) -> int:
         _change_dependency(root, args.name, None)
         print(f"Removed dependency '{args.name}'.")
     elif command == "install":
-        install(root)
-        print("Dependencies installed and lockfile updated.")
+        if args.frozen:
+            check(root)
+            print("Locked dependencies are installed and consistent.")
+        else:
+            install(root, offline=args.offline)
+            print("Dependencies installed and lockfile updated.")
     elif command == "update":
         manifest = read_manifest(root)
         if args.name and args.name not in manifest["dependencies"]:
@@ -126,7 +147,9 @@ def _run(args: argparse.Namespace) -> int:
             print("No dependencies.")
         for name in sorted(manifest["dependencies"]):
             source = manifest["dependencies"][name]
-            value = source.get("path", source.get("git", ""))
+            value = source.get(
+                "path", source.get("git", source.get("registry", ""))
+            )
             print(f"{name}: {value}")
     elif command == "check":
         check(root)

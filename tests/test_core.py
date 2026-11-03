@@ -62,7 +62,7 @@ class PackageCoreTests(unittest.TestCase):
 
             lock = install(project)
             first_entry = lock["dependencies"]["first"]
-            self.assertEqual(lock["lock_version"], 2)
+            self.assertEqual(lock["lock_version"], 3)
             self.assertEqual(
                 first_entry["package"],
                 {
@@ -95,6 +95,20 @@ class PackageCoreTests(unittest.TestCase):
             with self.assertRaisesRegex(PackageError, "supports 1.2 and 1.3"):
                 install(project)
 
+    def test_rejects_dependency_names_that_collide_on_windows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = initialize_project(Path(directory) / "project")
+            manifest_path = project / "yuba.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["dependencies"] = {
+                "Widget": {"path": "../widget"},
+                "widget": {"path": "../other"},
+            }
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(PackageError, "case-insensitive filesystems"):
+                install(project)
+
     def test_upgrades_format_1_lockfile_without_changing_dependency_source(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -118,9 +132,10 @@ class PackageCoreTests(unittest.TestCase):
                 json.dumps(old_lock), encoding="utf-8"
             )
 
+            check(project)
             lock = install(project)
 
-            self.assertEqual(lock["lock_version"], 2)
+            self.assertEqual(lock["lock_version"], 3)
             self.assertEqual(
                 lock["dependencies"]["library"]["source"], {"path": "../library"}
             )
@@ -241,7 +256,7 @@ class PackageCoreTests(unittest.TestCase):
             first = install(project)
             first_revision = first["dependencies"]["library"]["resolved"]["rev"]
             self.assertRegex(first_revision, r"^[0-9a-f]{40,64}$")
-            self.assertEqual(first["lock_version"], 2)
+            self.assertEqual(first["lock_version"], 3)
             check(project)
             self.assertEqual(
                 install(project)["dependencies"]["library"]["resolved"]["rev"],

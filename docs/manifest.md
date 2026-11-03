@@ -43,26 +43,53 @@ Git dependencies may be pinned to a branch, tag, or commit:
 }
 ```
 
+Registry dependencies declare a semantic-version requirement:
+
+```json
+{
+  "dependencies": {
+    "text_utils": { "registry": "^1.2.0" }
+  }
+}
+```
+
+Set `YUBAPKG_REGISTRY_URL` to the trusted HTTPS registry endpoint before adding
+or resolving a registry dependency. Supported requirements include exact
+versions, caret and tilde ranges, inequalities, and `x`/`*` wildcards.
+Whitespace or commas combine constraints with AND. New resolution selects the
+highest compatible, non-yanked release for YubaLANG 1.3. See the
+[registry protocol reference](registry.md) for metadata format, HTTPS policy,
+limits, and cache behavior.
+
 The dependency key must match the package's `name`. YubaPKG resolves an
 unpinned Git dependency to a commit ID and stores that immutable revision in
 `yuba.lock.json`. Normal installs reuse the locked revision; `yubapkg package
-update` resolves a newer revision. Git checkouts are stored in
-`.yuba/packages/<name>`.
+update` resolves newer versions for all direct Git/registry dependencies, or
+for the selected direct dependency and its newly resolved transitive graph.
+Registry installs lock the exact semantic
+version, registry origin, artifact URL, SHA-256 digest, package-tree digest,
+and nested dependency graph. Git checkouts and registry packages are stored
+under `.yuba/packages/<name>`.
 
 Path dependencies follow the current contents of their directory and are not
 copied into the package cache.
 
 ## Lockfile
 
-Check `yuba.lock.json` into version control along with `yuba.json`. Lockfile
-format 2 records each dependency's source and resolved path or Git commit,
-package identity, and complete nested dependency graph. Each dependency's own
-lockfile records the graph relative to its manifest. `yubapkg package check`
-compares manifests, nested lockfiles, package identities, and local
-installations without contacting Git remotes.
+Check `yuba.lock.json` into version control along with `yuba.json`. Format 2
+records path and Git dependency graphs. Format 3 adds exact registry releases,
+artifact and tree hashes, and the complete nested graph. Each dependency's
+own lockfile records the graph relative to its manifest. `yubapkg package
+check` validates the graph and cached registry content without contacting the
+registry or Git remotes.
 
-Existing format-1 lockfiles are upgraded to format 2 by
+Existing format-1 and format-2 lockfiles are upgraded by
 `yubapkg package install`, preserving previously locked Git revisions when
-sources are unchanged. Path and Git dependencies may be nested recursively;
-registry metadata, semantic-version range solving, and package publishing are
-future work.
+sources are unchanged. Use `yubapkg package install --offline` to use only
+existing locks and local caches; use `--frozen` in CI to verify without
+resolution or writes. YubaLANG 1.3 imports format-3 registry packages offline,
+but registry installation and updates are performed by YubaPKG.
+
+YubaPKG does not currently implement publishing, authentication, package
+search, private registries, or package provenance. No public registry is
+operated by this project.

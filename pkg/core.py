@@ -12,12 +12,18 @@ from typing import Any
 
 MANIFEST_NAME = "yuba.json"
 LOCK_NAME = "yuba.lock.json"
-LOCK_VERSION = 2
+LOCK_VERSION = 3
+SUPPORTED_LOCK_VERSIONS = frozenset({1, 2, LOCK_VERSION})
 SUPPORTED_YUBALANG_VERSIONS = frozenset({"1.2", "1.3"})
 SUPPORTED_YUBALANG = "1.3"
 PACKAGE_CACHE = Path(".yuba") / "packages"
 _PACKAGE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]*\Z")
 _COMMIT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+_WINDOWS_RESERVED_NAMES = {
+    "con", "prn", "aux", "nul",
+    *(f"com{number}" for number in range(1, 10)),
+    *(f"lpt{number}" for number in range(1, 10)),
+}
 
 
 class PackageError(ValueError):
@@ -35,16 +41,22 @@ def find_project_root(path: Path) -> Path | None:
 
 
 def _validate_name(name: Any) -> None:
-    if not isinstance(name, str) or not _PACKAGE_NAME.fullmatch(name):
+    if (
+        not isinstance(name, str)
+        or not _PACKAGE_NAME.fullmatch(name)
+        or name.casefold() in _WINDOWS_RESERVED_NAMES
+    ):
         raise PackageError(
             f"Invalid package name '{name}'; use a letter followed by letters, "
-            "digits, underscores, or hyphens."
+            "digits, underscores, or hyphens, excluding reserved Windows names."
         )
 
 
 def _validate_source(name: str, source: Any) -> None:
     if not isinstance(source, dict):
-        raise PackageError(f"Dependency '{name}' must specify a path or Git source.")
+        raise PackageError(
+            f"Dependency '{name}' must specify a path, Git, or registry source."
+        )
     if set(source) == {"path"}:
         if not isinstance(source["path"], str) or not source["path"]:
             raise PackageError(f"Dependency '{name}' has an invalid path source.")
@@ -57,9 +69,19 @@ def _validate_source(name: str, source: Any) -> None:
         ):
             raise PackageError(f"Dependency '{name}' has an invalid Git revision.")
         return
+    if set(source) == {"registry"}:
+        from .semver import validate_requirement
+
+        try:
+            validate_requirement(source["registry"])
+        except (TypeError, ValueError) as error:
+            raise PackageError(
+                f"Dependency '{name}' has an invalid registry version requirement: {error}"
+            ) from error
+        return
     raise PackageError(
         f"Dependency '{name}' must specify either {{'path': ...}} "
-        "or {{'git': ..., 'rev': ...}}."
+        "{{'git': ..., 'rev': ...}}, or {{'registry': <version-range>}}."
     )
 
 
@@ -90,8 +112,15 @@ def read_manifest(root: Path) -> dict[str, Any]:
     dependencies = data.setdefault("dependencies", {})
     if not isinstance(dependencies, dict):
         raise PackageError(f"Manifest '{path}' field 'dependencies' must be an object.")
+    portable_names: set[str] = set()
     for name, source in dependencies.items():
         _validate_name(name)
+        if name.casefold() in portable_names:
+            raise PackageError(
+                f"Manifest '{path}' contains dependency names that collide "
+                "on case-insensitive filesystems."
+            )
+        portable_names.add(name.casefold())
         _validate_source(name, source)
     return data
 
@@ -125,7 +154,7 @@ def read_lockfile(root: Path) -> dict[str, Any]:
     if (
         not isinstance(lock.get("lock_version"), int)
         or isinstance(lock.get("lock_version"), bool)
-        or lock.get("lock_version") != LOCK_VERSION
+        or lock.get("lock_version") not in SUPPORTED_LOCK_VERSIONS
         or not isinstance(lock.get("dependencies"), dict)
     ):
         raise PackageError(
@@ -199,6 +228,7 @@ def _dependency_lock(
     source: dict[str, str],
     old_entry: Any,
     update: bool,
+    offline: bool = False,
 ) -> dict[str, Any]:
     if "path" in source:
         path = (root / source["path"]).resolve()
@@ -211,27 +241,85 @@ def _dependency_lock(
             "resolved": {"path": Path(source["path"]).as_posix()},
         }
 
+    if "registry" in source:
+        from .registry import fetch_metadata, registry_url, release_for
+        from .semver import Version, satisfies
+
+        old_source = old_entry.get("source") if isinstance(old_entry, dict) else None
+        old_resolved = old_entry.get("resolved") if isinstance(old_entry, dict) else None
+        if (
+            not update
+            and old_source == source
+            and isinstance(old_resolved, dict)
+            and isinstance(old_resolved.get("version"), str)
+            and isinstance(old_resolved.get("registry"), str)
+            and isinstance(old_resolved.get("artifact"), str)
+            and isinstance(old_resolved.get("sha256"), str)
+        ):
+            return {"source": source, "resolved": dict(old_resolved)}
+
+        endpoint = registry_url()
+        metadata = fetch_metadata(root, name, endpoint, offline)
+        candidates = sorted(
+            (Version.parse(version) for version in metadata["versions"]),
+            reverse=True,
+        )
+        selected = next(
+            (
+                version for version in candidates
+                if satisfies(version, source["registry"])
+                and not metadata["versions"][str(version)].get("yanked", False)
+                and "1.3" in metadata["versions"][str(version)]["yubalang"]
+            ),
+            None,
+        )
+        if selected is None:
+            raise PackageError(
+                f"No non-yanked release of '{name}' satisfies "
+                f"'{source['registry']}' and supports YubaLANG 1.3."
+            )
+        release = release_for(metadata, str(selected), "1.3")
+        return {
+            "source": source,
+            "resolved": {
+                "version": str(selected),
+                "registry": endpoint,
+                "artifact": release["artifact"],
+                "sha256": release["sha256"],
+            },
+        }
+
     url = source["git"]
     old_source = old_entry.get("source") if isinstance(old_entry, dict) else None
     old_resolved = old_entry.get("resolved") if isinstance(old_entry, dict) else None
+    lock_source = {"git": url}
+    if "rev" in source:
+        lock_source["rev"] = source["rev"]
     if (
         not update
-        and source.get("rev") is None
-        and old_source == {"git": url}
+        and old_source == lock_source
         and isinstance(old_resolved, dict)
         and isinstance(old_resolved.get("rev"), str)
         and _COMMIT_ID.fullmatch(old_resolved["rev"])
     ):
         revision = old_resolved["rev"]
+    elif offline:
+        raise PackageError(
+            f"Git dependency '{name}' has no matching locked revision for "
+            "offline resolution."
+        )
     else:
         revision = _resolve_git_revision(url, source.get("rev"), root)
-    lock_source = {"git": url}
-    if "rev" in source:
-        lock_source["rev"] = source["rev"]
     return {"source": lock_source, "resolved": {"rev": revision}}
 
 
-def _install_git(root: Path, name: str, url: str, revision: str) -> Path:
+def _install_git(
+    root: Path,
+    name: str,
+    url: str,
+    revision: str,
+    offline: bool = False,
+) -> Path:
     if not _COMMIT_ID.fullmatch(revision):
         raise PackageError(f"Lockfile has an invalid Git revision for '{name}'.")
     destination = root / PACKAGE_CACHE / name
@@ -242,14 +330,31 @@ def _install_git(root: Path, name: str, url: str, revision: str) -> Path:
     if (destination / ".git").is_dir():
         origin = _git(destination, "remote", "get-url", "origin")
         if origin != url:
+            if offline:
+                raise PackageError(
+                    f"Cached Git dependency '{name}' has origin '{origin}', "
+                    f"not '{url}'."
+                )
             _git(destination, "remote", "set-url", "origin", url)
-        _git(destination, "fetch", "--quiet", "origin")
+        if not offline:
+            _git(destination, "fetch", "--quiet", "origin")
     elif destination.exists():
         raise PackageError(
             f"Package cache path exists but is not a Git checkout: {destination}"
         )
     else:
+        if offline:
+            raise PackageError(
+                f"Git dependency '{name}' is not cached for offline installation."
+            )
         _git(root, "clone", "--quiet", "--no-checkout", url, str(destination))
+    if offline:
+        try:
+            _git(destination, "cat-file", "-e", f"{revision}^{{commit}}")
+        except PackageError as error:
+            raise PackageError(
+                f"Git revision for '{name}' is not cached for offline installation."
+            ) from error
     _git(destination, "checkout", "--quiet", "--detach", revision)
     if not (destination / MANIFEST_NAME).is_file():
         raise PackageError(f"Git dependency '{name}' has no {MANIFEST_NAME}.")
@@ -266,8 +371,12 @@ def _validate_dependency(root: Path, name: str, dependency_root: Path) -> None:
     resolve_entry(dependency_root, dependency_manifest)
 
 
-def install(root: Path, update: bool | set[str] = False) -> dict[str, Any]:
-    return _install(root.resolve(), update, [])
+def install(
+    root: Path,
+    update: bool | set[str] = False,
+    offline: bool = False,
+) -> dict[str, Any]:
+    return _install(root.resolve(), update, [], offline=offline)
 
 
 def _install(
@@ -275,6 +384,7 @@ def _install(
     update: bool | set[str],
     package_stack: list[str],
     locked_dependencies: dict[str, Any] | None = None,
+    offline: bool = False,
 ) -> dict[str, Any]:
     manifest = read_manifest(root)
     package_name = manifest["name"]
@@ -300,13 +410,27 @@ def _install(
             source,
             old_dependencies.get(name),
             update is True or isinstance(update, set) and name in update,
+            offline,
         )
         locked[name] = entry
         resolved = entry["resolved"]
         if "path" in resolved:
             dependency_root = (root / resolved["path"]).resolve()
+        elif "registry" in source:
+            from .registry import install_archive, tree_sha256
+
+            dependency_root = install_archive(
+                root,
+                name,
+                resolved["version"],
+                resolved,
+                offline,
+            )
+            resolved["tree_sha256"] = tree_sha256(dependency_root)
         else:
-            dependency_root = _install_git(root, name, source["git"], resolved["rev"])
+            dependency_root = _install_git(
+                root, name, source["git"], resolved["rev"], offline
+            )
         _validate_dependency(root, name, dependency_root)
         dependency_manifest = read_manifest(dependency_root)
         entry["package"] = {
@@ -320,6 +444,7 @@ def _install(
             entry.get("dependencies")
             if isinstance(entry.get("dependencies"), dict)
             else None,
+            offline,
         )
         entry["dependencies"] = dependency_lock["dependencies"]
 
@@ -339,6 +464,8 @@ def _check(
 ) -> None:
     manifest = read_manifest(root)
     lock = read_lockfile(root)
+    lock_version = lock["lock_version"]
+    nested_graph = lock_version in (2, LOCK_VERSION)
     package_name = manifest["name"]
     if package_name in package_stack:
         cycle = " -> ".join((*package_stack, package_name))
@@ -346,6 +473,7 @@ def _check(
     package_stack = [*package_stack, package_name]
     manifest_dependencies = manifest["dependencies"]
     locked_dependencies = lock["dependencies"]
+    legacy_graph = lock_version == 1
     if (
         expected_dependencies is not None
         and locked_dependencies != expected_dependencies
@@ -367,17 +495,18 @@ def _check(
                 "run 'yubapkg package install'."
             )
         package = entry.get("package")
-        if not isinstance(package, dict):
-            raise PackageError(
-                f"Lockfile entry for '{name}' has no package identity; "
-                "run 'yubapkg package install'."
-            )
         nested_dependencies = entry.get("dependencies")
-        if not isinstance(nested_dependencies, dict):
-            raise PackageError(
-                f"Lockfile entry for '{name}' has no locked dependency graph; "
-                "run 'yubapkg package install'."
-            )
+        if not legacy_graph:
+            if not isinstance(package, dict):
+                raise PackageError(
+                    f"Lockfile entry for '{name}' has no package identity; "
+                    "run 'yubapkg package install'."
+                )
+            if not isinstance(nested_dependencies, dict):
+                raise PackageError(
+                    f"Lockfile entry for '{name}' has no locked dependency graph; "
+                    "run 'yubapkg package install'."
+                )
         resolved = entry.get("resolved")
         if not isinstance(resolved, dict):
             raise PackageError(f"Lockfile entry for '{name}' is malformed.")
@@ -388,6 +517,17 @@ def _check(
             dependency_root = (root / resolved["path"]).resolve()
             if not dependency_root.is_dir():
                 raise PackageError(f"Path dependency '{name}' is missing: {dependency_root}")
+        elif "registry" in source:
+            if not nested_graph:
+                raise PackageError(
+                    "Registry dependencies require lockfile format 3; run "
+                    "'yubapkg package install'."
+                )
+            from .registry import verify_cached_installation
+
+            if resolved.get("version") is None:
+                raise PackageError(f"Registry lock entry for '{name}' has no version.")
+            dependency_root = verify_cached_installation(root, name, resolved)
         else:
             revision = resolved.get("rev")
             if not isinstance(revision, str) or not _COMMIT_ID.fullmatch(revision):
@@ -416,12 +556,13 @@ def _check(
             field: dependency_manifest[field]
             for field in ("name", "version", "entry", "yubalang")
         }
-        if package != expected_package:
+        if not legacy_graph and package != expected_package:
             raise PackageError(
                 f"Package '{name}' metadata differs from the lockfile; "
                 "run 'yubapkg package install'."
             )
-        _check(dependency_root, package_stack, nested_dependencies)
+        if nested_graph:
+            _check(dependency_root, package_stack, nested_dependencies)
 
 
 def resolve_dependency(root: Path, name: str) -> Path | None:
@@ -433,6 +574,8 @@ def resolve_dependency(root: Path, name: str) -> Path | None:
     resolved = entry["resolved"]
     if "path" in resolved:
         return (root / resolved["path"]).resolve()
+    if "registry" in resolved:
+        return (root / ".yuba" / "packages" / name).resolve()
     return (root / PACKAGE_CACHE / name).resolve()
 
 

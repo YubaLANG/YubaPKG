@@ -11,27 +11,27 @@ in 1.1.0.
 
 ## P0 - 1.1.0 registry and package contract
 
-- [ ] Decide whether the first registry uses a static metadata/catalog plus
-  immutable object storage or a hosted API, and record expected operating
-  cost, availability, lookup latency, and maintenance tradeoffs.
-- [ ] Specify registry URLs, package metadata schema, package-name rules,
+- [x] Select static metadata plus immutable artifact hosting for the initial
+  protocol; hosting cost, availability, and operations remain a launch
+  decision because this repository does not run a public service.
+- [x] Specify registry URLs, package metadata schema, package-name rules,
   version format, YubaLANG compatibility declaration, dependency syntax,
   artifact URLs, and integrity metadata.
-- [ ] Define immutable package release semantics, including how yanked,
+- [x] Define immutable package release semantics, including how yanked,
   deprecated, or compromised versions are represented without silently
   changing an existing package.
-- [ ] Define registry identity and trust policy, including whether multiple
+- [x] Define registry identity and trust policy, including whether multiple
   registries and private registries are supported in the initial format.
-- [ ] Publish a registry format reference and examples that can be consumed
+- [x] Publish a registry format reference and examples that can be consumed
   by independent clients and mirrors.
-- [ ] Keep the project manifest and lockfile readable, deterministic, and
+- [x] Keep the project manifest and lockfile readable, deterministic, and
   compatible with the YubaLANG runtime contract.
 
 ## P0 - Dependency resolution
 
-- [ ] Implement semantic-version parsing and comparison, including prerelease
+- [x] Implement semantic-version parsing and comparison, including prerelease
   ordering and invalid-version diagnostics.
-- [ ] Define and implement supported version requirements such as exact
+- [x] Define and implement supported version requirements such as exact
   versions, compatible ranges, inequalities, and wildcard behavior.
 - [ ] Resolve direct and transitive dependencies deterministically and
   report incompatible constraints with the dependency paths that caused the
@@ -39,31 +39,31 @@ in 1.1.0.
 - [ ] Define behavior for cycles, duplicate package names from different
   sources, package aliases, optional dependencies, and platform-specific
   dependencies.
-- [ ] Respect each package's declared YubaLANG compatibility and report
+- [x] Respect each package's declared YubaLANG compatibility and report
   incompatible runtime requirements before installing it.
-- [ ] Make resolution stable across operating systems, registry response
+- [x] Make resolution stable across operating systems, registry response
   ordering, and repeated runs.
-- [ ] Preserve existing path and Git dependencies during the registry
+- [x] Preserve existing path and Git dependencies during the registry
   transition, and specify how mixed source types participate in the graph.
-- [ ] Add a lockfile version that captures the complete dependency graph,
+- [x] Add a lockfile version that captures the complete dependency graph,
   exact package versions, source registry, immutable artifact location,
   content hashes, and any required compatibility metadata.
-- [ ] Define lockfile migration from the current direct path/Git format;
+- [x] Define lockfile migration from the current direct path/Git format;
   never silently discard or rewrite a user's locked dependency choices.
-- [ ] Make lockfile installs reproduce exact resolved versions without
+- [x] Make lockfile installs reproduce exact resolved versions without
   re-solving unless the user explicitly requests an update.
 
 ## P0 - Fast, reliable registry client
 
-- [ ] Fetch metadata only for packages needed for resolution; avoid
+- [x] Fetch metadata only for packages needed for resolution; avoid
   downloading a full registry catalog during normal install.
 - [ ] Add an efficient package search index and document its update and
   consistency guarantees.
-- [ ] Cache registry metadata with HTTP validators such as ETag or
+- [x] Cache registry metadata with HTTP validators such as ETag or
   Last-Modified, and make cache expiration and offline behavior explicit.
 - [ ] Cache verified immutable package artifacts by content hash and share
   them across projects where safe.
-- [ ] Support offline install from a complete lockfile and local artifact
+- [x] Support offline install from a complete lockfile and local artifact
   cache; report exactly which required package is unavailable offline.
 - [ ] Use connection/read timeouts, bounded retries, clear cancellation,
   useful progress reporting, and actionable errors for HTTP failures.
@@ -79,44 +79,43 @@ in 1.1.0.
 
 ## P0 - Secure artifacts and installation
 
-- [ ] Require SHA-256 or a stronger agreed content hash for every registry
+- [x] Require SHA-256 or a stronger agreed content hash for every registry
   artifact, store it in the lockfile, and verify before extraction.
-- [ ] Define safe archive extraction rules for traversal entries, absolute
+- [x] Define safe archive extraction rules for traversal entries, absolute
   paths, symlinks, duplicate paths, malformed archives, excessive file
   counts, and oversized expanded content.
-- [ ] Extract into a temporary location, validate the package, then install
+- [x] Extract into a temporary location, validate the package, then install
   atomically; leave no success-shaped partial state after a failure.
-- [ ] Ensure the manifest entry and every package file resolve inside the
+- [x] Ensure the manifest entry and every package file resolve inside the
   package root before reporting a successful install.
-- [ ] Protect against cache path collisions, dependency name collisions,
+- [x] Protect against cache path collisions, dependency name collisions,
   case-insensitive filesystem collisions, and unsafe package identifiers.
-- [ ] Keep authentication secrets out of manifests, lockfiles, logs, and
-  error messages; use the operating system's credential store where
-  available and document secure fallback behavior.
+- [x] Keep credentials out of manifests, lockfiles, logs, and error messages;
+  authentication is not supported by this initial protocol.
 - [ ] Define package signature or publisher-provenance requirements and
   implement them only with a clearly documented key lifecycle and
   verification model.
-- [ ] Document that package installation does not sandbox executable
+- [x] Document that package installation does not sandbox executable
   package code and that YubaLANG imports can execute package top-level code.
 
 ## P0 - CLI and project workflow
 
-- [ ] Keep `init`, `add`, `remove`, `install`, `update`, `list`, and `check`
+- [x] Keep `init`, `add`, `remove`, `install`, `update`, `list`, and `check`
   consistent across path, Git, and registry dependencies.
 - [ ] Add package search and package/version information commands with
   useful output for maintainers and new users.
 - [ ] Add a dependency tree command that shows versions, sources, and
   transitive relationships.
 - [ ] Add outdated-dependency reporting without changing the lockfile.
-- [ ] Clarify update behavior: update all, update one package and its
+- [x] Clarify update behavior: update all, update one package and its
   necessary dependents, or update only explicitly selected dependencies.
-- [ ] Add an explicit locked/frozen install mode for CI that fails if the
+- [x] Add an explicit locked/frozen install mode for CI that fails if the
   manifest and lockfile disagree and never mutates either.
 - [ ] Add cache inspection, verification, and targeted cleanup commands;
   never delete project or user data implicitly.
 - [ ] Support global and per-project registry configuration with documented
   precedence and validation.
-- [ ] Provide clear exit codes and actionable diagnostics for parse,
+- [x] Provide clear exit codes and actionable diagnostics for parse,
   resolution, compatibility, network, authentication, integrity, and
   filesystem errors.
 - [ ] Make `--help` cover examples, source forms, offline usage, and
@@ -153,11 +152,11 @@ in 1.1.0.
   malformed archives, interrupted downloads, and atomic install recovery.
 - [ ] Add CLI end-to-end tests for project creation, adding registry
   dependencies, install/update/list/tree/check, and frozen CI installs.
-- [ ] Add integration tests that install a transitive registry dependency
+- [x] Add integration tests that install a transitive registry dependency
   graph and run its imports with the matching YubaLANG runtime offline.
 - [ ] Test supported Python versions and Windows, Linux, and macOS path,
   cache, and archive behavior.
-- [ ] Document supported manifest and lockfile versions, YubaLANG
+- [x] Document supported manifest and lockfile versions, YubaLANG
   compatibility, registry configuration, cache location, and offline use.
 - [ ] Publish YubaPKG 1.1.0 release notes, migration guidance, and known
   registry limitations.

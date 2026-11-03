@@ -6,14 +6,16 @@ can evolve independently from the language runtime.
 
 ## Current status
 
-The first CLI release supports project initialization and recursive path or
-Git dependencies. Installs are recorded in lockfile format 2;
-Git dependencies are checked out at exact commits under `.yuba/packages`.
-YubaPKG accepts YubaLANG 1.2 and 1.3 manifests and writes lockfiles compatible
-with the current YubaLANG package importer.
+The CLI supports project initialization and recursive path, Git, and static
+registry dependencies. Registry ranges resolve to immutable releases with
+SHA-256-verified artifacts; installs are recorded in lockfile format 3.
+YubaPKG accepts YubaLANG 1.2 and 1.3 manifests, and YubaLANG 1.3 can import
+the installed registry packages offline.
 
-The public registry, semantic-version range solving, and package publishing
-are not implemented yet.
+The registry client consumes the static protocol described in
+[the registry reference](docs/registry.md). This repository does not operate a
+public registry. Publishing, authentication, package search, and private
+registries are not implemented.
 
 ## Run from a checkout
 
@@ -27,6 +29,18 @@ yubapkg package install
 yubapkg package check
 ```
 
+For a registry dependency, configure the trusted HTTPS endpoint first:
+
+```powershell
+$env:YUBAPKG_REGISTRY_URL = "https://packages.example.org"
+yubapkg package add helpers --registry "^1.2.0"
+yubapkg package install --offline
+yubapkg package install --frozen
+```
+
+`--offline` uses locked resolutions and cached artifacts only.
+`--frozen` verifies the current lock and install without changing them.
+
 The package can also be run without installing the console command:
 
 ```powershell
@@ -36,8 +50,9 @@ python -m pkg package --help
 Use `yubapkg package init` to create a project, then run package commands from
 the project directory or one of its subdirectories.
 
-See [the manifest reference](docs/manifest.md) for the project and lockfile
-formats.
+See [the manifest reference](docs/manifest.md) for project and lockfile
+formats, and [the registry reference](docs/registry.md) for the static
+metadata protocol, trust rules, cache behavior, and current limitations.
 
 ## License
 
