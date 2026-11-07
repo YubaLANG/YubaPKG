@@ -54,6 +54,14 @@ class RegistryServer:
                     self.send_header("Location", "https://example.invalid/")
                     self.end_headers()
                     return
+                if self.path == "/v1/search.json":
+                    body = owner.search_index
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 if self.path.startswith("/v1/packages/"):
                     name = self.path.rsplit("/", 1)[-1].removesuffix(".json")
                     owner.metadata_requests.append(
@@ -84,6 +92,7 @@ class RegistryServer:
                 pass
 
         self.metadata = {}
+        self.search_index = b'{"schema_version":1,"packages":[]}'
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
@@ -121,6 +130,51 @@ class RegistryServer:
 
 
 class RegistryIntegrationTests(unittest.TestCase):
+    def test_search_info_and_outdated_leave_lockfile_unchanged(self):
+        with RegistryServer() as registry, tempfile.TemporaryDirectory() as directory:
+            registry.add_package("widget", "1.0.0")
+            root = initialize_project(Path(directory) / "app")
+            manifest_path = root / "yuba.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["dependencies"] = {"widget": {"registry": "*"}}
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with patch.dict(os.environ, {"YUBAPKG_REGISTRY_URL": registry.endpoint}):
+                install(root)
+                metadata = json.loads(registry.metadata["widget"])
+                metadata["versions"]["1.1.0"] = dict(
+                    metadata["versions"]["1.0.0"]
+                )
+                registry.metadata["widget"] = json.dumps(metadata).encode("utf-8")
+                registry.search_index = json.dumps(
+                    {
+                        "schema_version": 1,
+                        "packages": [
+                            {
+                                "name": "widget",
+                                "description": "Small utility helpers",
+                            }
+                        ],
+                    }
+                ).encode("utf-8")
+                lock_before = (root / "yuba.lock.json").read_bytes()
+                with patch("pathlib.Path.cwd", return_value=root):
+                    search_output = io.StringIO()
+                    with contextlib.redirect_stdout(search_output):
+                        self.assertEqual(main(["package", "search", "utility"]), 0)
+                    self.assertIn("widget - Small utility helpers", search_output.getvalue())
+
+                    info_output = io.StringIO()
+                    with contextlib.redirect_stdout(info_output):
+                        self.assertEqual(main(["package", "info", "widget", "1.0.0"]), 0)
+                    self.assertIn("1.0.0:", info_output.getvalue())
+
+                    outdated_output = io.StringIO()
+                    with contextlib.redirect_stdout(outdated_output):
+                        self.assertEqual(main(["package", "outdated"]), 0)
+                    self.assertIn("widget 1.0.0 -> 1.1.0", outdated_output.getvalue())
+                self.assertEqual((root / "yuba.lock.json").read_bytes(), lock_before)
+
     def test_installs_transitive_registry_dependencies_and_uses_cache_offline(self):
         with RegistryServer() as registry, tempfile.TemporaryDirectory() as directory:
             registry.add_package("leaf", "1.1.0")
@@ -203,6 +257,39 @@ class RegistryIntegrationTests(unittest.TestCase):
                 with self.assertRaisesRegex(PackageError, "SHA-256 mismatch"):
                     install(root)
             self.assertFalse((root / ".yuba" / "packages" / "widget").exists())
+
+    def test_failed_reinstall_restores_previous_package(self):
+        with RegistryServer() as registry, tempfile.TemporaryDirectory() as directory:
+            registry.add_package("widget", "1.0.0")
+            root = initialize_project(Path(directory) / "app")
+            manifest_path = root / "yuba.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["dependencies"] = {"widget": {"registry": "*"}}
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with patch.dict(os.environ, {"YUBAPKG_REGISTRY_URL": registry.endpoint}):
+                install(root)
+                package = root / ".yuba" / "packages" / "widget"
+                (package / "main.yl").write_text("modified\n", encoding="utf-8")
+                real_replace = os.replace
+                calls = 0
+
+                def fail_install_swap(source, destination):
+                    nonlocal calls
+                    calls += 1
+                    if calls == 2:
+                        raise OSError("simulated replacement failure")
+                    return real_replace(source, destination)
+
+                with patch("pkg.registry.os.replace", side_effect=fail_install_swap):
+                    with self.assertRaisesRegex(PackageError, "Cannot install 'widget@1.0.0'"):
+                        install(root)
+
+            self.assertEqual(
+                (package / "main.yl").read_text(encoding="utf-8"),
+                "modified\n",
+            )
+            self.assertEqual(list(package.parent.glob(".widget.previous.*")), [])
 
     def test_archive_extraction_rejects_path_traversal(self):
         with tempfile.TemporaryDirectory() as directory:

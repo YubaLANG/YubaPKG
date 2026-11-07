@@ -18,6 +18,7 @@ from .core import (
     MANIFEST_NAME,
     PackageError,
     _WINDOWS_RESERVED_NAMES,
+    _validate_name,
     read_manifest,
     resolve_entry,
 )
@@ -33,13 +34,61 @@ HTTP_TIMEOUT = 15
 SUPPORTED_YUBALANG = frozenset({"1.2", "1.3"})
 
 
-def registry_url(value: str | None = None) -> str:
-    endpoint = value or os.environ.get(REGISTRY_ENV)
-    if not endpoint:
+def _global_config_path() -> Path:
+    if os.name == "nt":
+        base = Path(
+            os.environ.get("APPDATA")
+            or Path.home() / "AppData" / "Roaming"
+        )
+        return base / "YubaPKG" / "config.json"
+    base = Path(
+        os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
+    )
+    return base / "yubapkg" / "config.json"
+
+
+def _configured_registry(root: Path | None, global_config: bool) -> str | None:
+    if global_config:
+        path = _global_config_path()
+    else:
+        if root is None:
+            return None
+        path = root / "yubapkg.config.json"
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise PackageError(f"Cannot read registry configuration '{path}': {error}") from error
+    if (
+        not isinstance(config, dict)
+        or set(config) - {"registry_url"}
+        or not isinstance(config.get("registry_url"), str)
+        or not config["registry_url"]
+    ):
+        raise PackageError(f"Registry configuration '{path}' is malformed.")
+    return config["registry_url"]
+
+
+def registry_url(value: str | None = None, root: Path | None = None) -> str:
+    if value == "":
+        raise PackageError("Registry URL must not be empty.")
+    endpoint = value
+    if endpoint is None:
+        endpoint = os.environ.get(REGISTRY_ENV)
+    if endpoint is None:
+        endpoint = _configured_registry(root, global_config=False)
+    if endpoint is None:
+        endpoint = _configured_registry(None, global_config=True)
+    if not isinstance(endpoint, str) or not endpoint:
         raise PackageError(
             f"Registry dependencies require {REGISTRY_ENV} to name the trusted "
             "registry HTTPS base URL."
         )
+    if endpoint != endpoint.strip() or any(
+        ord(char) < 32 or ord(char) == 127 for char in endpoint
+    ):
+        raise PackageError("Registry URL must not contain whitespace or control characters.")
     try:
         parsed = urllib.parse.urlsplit(endpoint)
         parsed.port
@@ -64,6 +113,83 @@ def registry_url(value: str | None = None) -> str:
     ):
         raise PackageError("Registry connections must use HTTPS.")
     return endpoint.rstrip("/")
+
+
+def configured_registry_url(
+    root: Path | None = None, global_config: bool = False
+) -> str | None:
+    value = _configured_registry(root, global_config)
+    if value is not None:
+        return registry_url(value)
+    return None
+
+
+def set_registry_url(
+    value: str | None,
+    root: Path | None = None,
+    global_config: bool = False,
+) -> Path:
+    if not global_config and root is None:
+        raise PackageError("Project registry configuration requires a project manifest.")
+    if value is not None:
+        value = registry_url(value)
+    if global_config:
+        path = _global_config_path()
+    else:
+        path = root / "yubapkg.config.json"
+    try:
+        if value is None:
+            path.unlink(missing_ok=True)
+        else:
+            _atomic_write(
+                path,
+                (json.dumps({"registry_url": value}, indent=2, sort_keys=True) + "\n").encode(
+                    "utf-8"
+                ),
+            )
+    except OSError as error:
+        raise PackageError(f"Cannot update registry configuration '{path}': {error}") from error
+    return path
+
+
+def search_registry(endpoint: str, query: str = "") -> list[dict[str, str]]:
+    url = f"{endpoint}/v1/search.json"
+    data, _ = _read_response(url, {"Accept": "application/json"}, MAX_METADATA_BYTES)
+    try:
+        index = json.loads(data.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise PackageError(f"Registry search index is invalid: {error}") from error
+    if (
+        not isinstance(index, dict)
+        or isinstance(index.get("schema_version"), bool)
+        or index.get("schema_version") != 1
+        or not isinstance(index.get("packages"), list)
+    ):
+        raise PackageError("Registry search index has an unsupported schema.")
+    results: list[dict[str, str]] = []
+    folded_query = query.casefold()
+    seen: set[str] = set()
+    for package in index["packages"]:
+        if (
+            not isinstance(package, dict)
+            or not isinstance(package.get("name"), str)
+            or not package["name"]
+            or ("description" in package and not isinstance(package["description"], str))
+        ):
+            raise PackageError("Registry search index contains a malformed package.")
+        name = package["name"]
+        _validate_name(name)
+        description = package.get("description", "")
+        if any(ord(char) < 32 or ord(char) == 127 for char in description):
+            raise PackageError(
+                f"Registry search description for '{name}' contains control characters."
+            )
+        if name.casefold() in seen:
+            raise PackageError(f"Registry search index repeats package '{name}'.")
+        seen.add(name.casefold())
+        if folded_query in f"{name} {description}".casefold():
+            results.append({"name": name, "description": description})
+    return sorted(results, key=lambda result: result["name"].casefold())
 
 
 def _origin(url: str) -> tuple[str, str, int | None]:
@@ -143,7 +269,17 @@ def fetch_metadata(
     name: str,
     endpoint: str,
     offline: bool = False,
+    use_cache: bool = True,
 ) -> dict[str, Any]:
+    if not use_cache:
+        if offline:
+            raise PackageError("Uncached metadata requests cannot run offline.")
+        metadata_url = f"{endpoint}/v1/packages/{urllib.parse.quote(name, safe='')}.json"
+        data, _ = _read_response(
+            metadata_url, {"Accept": "application/json"}, MAX_METADATA_BYTES
+        )
+        return _parse_metadata(data, name)
+
     path = _metadata_path(root, name)
     headers: dict[str, str] = {"Accept": "application/json"}
     cache_headers_path = path.with_suffix(".headers.json")
@@ -258,8 +394,14 @@ def _parse_metadata(data: bytes, expected_name: str) -> dict[str, Any]:
             )
         artifact = release.get("artifact")
         digest = release.get("sha256")
-        if not isinstance(artifact, str) or not artifact:
-            raise PackageError(f"Registry release '{expected_name}@{version}' has no artifact.")
+        if (
+            not isinstance(artifact, str)
+            or not artifact
+            or any(ord(char) < 32 or ord(char) == 127 for char in artifact)
+        ):
+            raise PackageError(
+                f"Registry release '{expected_name}@{version}' has an invalid artifact URL."
+            )
         if (
             not isinstance(digest, str)
             or len(digest) != 64
@@ -421,6 +563,12 @@ def install_archive(
 ) -> Path:
     archive = ensure_artifact(root, resolved, offline)
     destination = root / ".yuba" / "packages" / name
+    if destination.is_symlink() or (
+        destination.exists() and not destination.is_dir()
+    ):
+        raise PackageError(
+            f"Package cache destination is not a regular directory: {destination}"
+        )
     expected_tree = resolved.get("tree_sha256")
     if (
         isinstance(expected_tree, str)
@@ -462,18 +610,57 @@ def install_archive(
                 f"Installed package '{name}@{version}' differs from its lockfile."
             )
         if destination.exists():
-            backup = destination.with_name(f".{destination.name}.previous")
-            if backup.exists():
+            try:
+                backup = Path(
+                    tempfile.mkdtemp(
+                        prefix=f".{name}.previous.", dir=destination.parent
+                    )
+                )
+                backup.rmdir()
+            except OSError as error:
+                raise PackageError(
+                    f"Cannot prepare a safe reinstall for '{name}@{version}': {error}"
+                ) from error
+            moved_previous = False
+            try:
+                os.replace(destination, backup)
+                moved_previous = True
+                os.replace(temporary_root, destination)
+            except OSError as install_error:
+                if moved_previous:
+                    try:
+                        os.replace(backup, destination)
+                    except OSError as restore_error:
+                        raise PackageError(
+                            f"Cannot install '{name}@{version}': {install_error}; "
+                            f"cannot restore the previous package: {restore_error}"
+                        ) from restore_error
+                else:
+                    try:
+                        backup.rmdir()
+                    except OSError as cleanup_error:
+                        raise PackageError(
+                            f"Cannot install '{name}@{version}': {install_error}; "
+                            f"cannot remove temporary backup directory '{backup}': "
+                            f"{cleanup_error}"
+                        ) from cleanup_error
+                raise PackageError(
+                    f"Cannot install '{name}@{version}': {install_error}"
+                ) from install_error
+            try:
                 shutil.rmtree(backup)
-            os.replace(destination, backup)
+            except OSError as error:
+                raise PackageError(
+                    f"Installed '{name}@{version}', but could not remove the "
+                    f"previous package backup '{backup}': {error}"
+                ) from error
+        else:
             try:
                 os.replace(temporary_root, destination)
-            except OSError:
-                os.replace(backup, destination)
-                raise
-            shutil.rmtree(backup)
-        else:
-            os.replace(temporary_root, destination)
+            except OSError as error:
+                raise PackageError(
+                    f"Cannot install '{name}@{version}' at '{destination}': {error}"
+                ) from error
     return destination
 
 

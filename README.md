@@ -14,8 +14,9 @@ the installed registry packages offline.
 
 The registry client consumes the static protocol described in
 [the registry reference](docs/registry.md). This repository does not operate a
-public registry. Publishing, authentication, package search, and private
-registries are not implemented.
+public registry. Search uses the optional static search index; package
+publishing, authentication, private registries, signatures, and publisher
+provenance are not implemented.
 
 ## Run from a checkout
 
@@ -27,6 +28,8 @@ yubapkg package init
 yubapkg package add helpers --path ..\helpers
 yubapkg package install
 yubapkg package check
+yubapkg package tree
+yubapkg package cache list
 ```
 
 For a registry dependency, configure the trusted HTTPS endpoint first:
@@ -36,10 +39,16 @@ $env:YUBAPKG_REGISTRY_URL = "https://packages.example.org"
 yubapkg package add helpers --registry "^1.2.0"
 yubapkg package install --offline
 yubapkg package install --frozen
+yubapkg package search helpers
+yubapkg package info helpers
+yubapkg package outdated
 ```
 
 `--offline` uses locked resolutions and cached artifacts only.
 `--frozen` verifies the current lock and install without changing them.
+Instead of the environment variable, use
+`yubapkg package config registry https://packages.example.org` for
+project-local configuration or add `--global` for user-level configuration.
 
 The package can also be run without installing the console command:
 

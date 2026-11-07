@@ -61,6 +61,12 @@ highest compatible, non-yanked release for YubaLANG 1.3. See the
 [registry protocol reference](registry.md) for metadata format, HTTPS policy,
 limits, and cache behavior.
 
+Use `yubapkg package search <terms>` to search the registry's optional static
+search index and `yubapkg package info <name> [version]` to inspect release
+metadata. `package tree` displays the locked graph. `package outdated` checks
+newer registry releases compatible with each declared range without changing
+the lockfile; it does not compare path or Git dependencies.
+
 The dependency key must match the package's `name`. YubaPKG resolves an
 unpinned Git dependency to a commit ID and stores that immutable revision in
 `yuba.lock.json`. Normal installs reuse the locked revision; `yubapkg package
@@ -90,6 +96,12 @@ existing locks and local caches; use `--frozen` in CI to verify without
 resolution or writes. YubaLANG 1.3 imports format-3 registry packages offline,
 but registry installation and updates are performed by YubaPKG.
 
-YubaPKG does not currently implement publishing, authentication, package
-search, private registries, or package provenance. No public registry is
-operated by this project.
+Configure a registry through `YUBAPKG_REGISTRY_URL`, project-level
+`yubapkg.config.json`, or user-level configuration. Precedence and paths are
+documented in the [registry reference](registry.md). `package cache list`,
+`cache verify`, and `cache clean` operate only on the current project's
+`.yuba` cache.
+
+YubaPKG does not currently implement publishing, authentication, private
+registries, package signatures, or publisher provenance. No public registry
+is operated by this project.

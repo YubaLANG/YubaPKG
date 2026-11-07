@@ -57,7 +57,7 @@ in 1.1.0.
 
 - [x] Fetch metadata only for packages needed for resolution; avoid
   downloading a full registry catalog during normal install.
-- [ ] Add an efficient package search index and document its update and
+- [x] Add an efficient package search index and document its update and
   consistency guarantees.
 - [x] Cache registry metadata with HTTP validators such as ETag or
   Last-Modified, and make cache expiration and offline behavior explicit.
@@ -102,23 +102,23 @@ in 1.1.0.
 
 - [x] Keep `init`, `add`, `remove`, `install`, `update`, `list`, and `check`
   consistent across path, Git, and registry dependencies.
-- [ ] Add package search and package/version information commands with
+- [x] Add package search and package/version information commands with
   useful output for maintainers and new users.
-- [ ] Add a dependency tree command that shows versions, sources, and
+- [x] Add a dependency tree command that shows versions, sources, and
   transitive relationships.
-- [ ] Add outdated-dependency reporting without changing the lockfile.
+- [x] Add outdated-dependency reporting without changing the lockfile.
 - [x] Clarify update behavior: update all, update one package and its
   necessary dependents, or update only explicitly selected dependencies.
 - [x] Add an explicit locked/frozen install mode for CI that fails if the
   manifest and lockfile disagree and never mutates either.
-- [ ] Add cache inspection, verification, and targeted cleanup commands;
+- [x] Add cache inspection, verification, and targeted cleanup commands;
   never delete project or user data implicitly.
-- [ ] Support global and per-project registry configuration with documented
+- [x] Support global and per-project registry configuration with documented
   precedence and validation.
 - [x] Provide clear exit codes and actionable diagnostics for parse,
   resolution, compatibility, network, authentication, integrity, and
   filesystem errors.
-- [ ] Make `--help` cover examples, source forms, offline usage, and
+- [x] Make `--help` cover examples, source forms, offline usage, and
   publishing without requiring network access.
 
 ## P0 - Publishing and registry operations
